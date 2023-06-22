@@ -1,0 +1,147 @@
+BEGIN TRANSACTION;
+
+-- Newly added registrations
+WITH NEW AS (
+    SELECT *
+    FROM tempIMPQ
+    WHERE CustomerID IS NULL
+),
+-- JOIN with Customer table
+Merged AS (
+    SELECT c.CustomerID, n.RegistrationID, n.dob
+    FROM NEW n
+    JOIN Customer c ON n.Email = c.Email
+)
+
+UPDATE tempIMPQ
+SET CustomerID = m.CustomerID
+FROM Merged m
+WHERE tempIMPQ.registrationID = m.RegistrationID
+AND tempIMPQ.CustomerID IS NULL;
+
+SAVE TRANSACTION savepoint1;
+
+UPDATE Customer
+SET dob = CAST(t.dob AS DATE)
+FROM tempIMPQ t
+WHERE Customer.CustomerID = t.CustomerID
+AND Customer.dob <> t.dob;
+
+SAVE TRANSACTION savepoint2;
+
+DECLARE @MaxCustID INT;
+SELECT @MaxCustID = MAX(customerID) FROM Customer;
+
+-- Customers not exist in the Customer table
+WITH CTE AS (
+    SELECT 
+    RegistrationID,
+    ROW_NUMBER() OVER (ORDER BY email) + @MaxCustID AS CustomerID
+    FROM tempIMPQ
+    WHERE CustomerID IS NULL
+)
+
+UPDATE tempIMPQ
+SET CustomerID = CTE.CustomerID
+FROM CTE
+WHERE tempIMPQ.RegistrationID = CTE.RegistrationID;
+
+SAVE TRANSACTION savepoint3;
+
+INSERT INTO Customer (
+    CustomerID,
+    Firstname,
+    Lastname,
+    Email,
+    dob,
+    Gender,
+    Phone,
+    Nationality,
+    Country,
+    allergy,
+    EmergencyContact,
+    EmergencyPhone,
+    medication,
+    EmailOwner
+)
+SELECT
+    CustomerID,
+    Firstname,
+    Lastname,
+    Email,
+    dob,
+    Gender,
+    Phone,
+    Nationality,
+    Country,
+    allergy,
+    ECN,
+    ECP,
+    medication,
+    1 AS EmailOwner
+FROM tempIMPQ
+WHERE CustomerID NOT IN (
+    SELECT CustomerID
+    FROM Customer
+);
+
+SAVE TRANSACTION savepoint4;
+
+INSERT INTO [Order] (
+    orderID,
+    participantID,
+    CustomerID,
+    registrationDate,
+    EventID,
+    CatID,
+    ticketphase,
+    items,
+    [status],
+    net_revenue,
+    discount_code,
+    discount_amount,
+    gross_revenue,
+    currency
+)
+SELECT
+    orderID,
+    RegistrationID,
+    CustomerID,
+    registrationDate,
+    'IM703PQ1' AS EventID,
+    catID,
+    ticketphase,
+    1 AS items,
+    1 AS [status],
+    [Gross revenue] - [discount amount] AS [net revenue],
+    [discount code],
+    [discount amount],
+    [Gross revenue],
+    'USD' AS Currency
+FROM tempIMPQ
+WHERE orderID NOT IN (
+    SELECT orderID
+    FROM [Order]
+);
+
+SAVE TRANSACTION savepoint5;
+
+INSERT INTO [Fact] (CustomerID, EventID, CatID, PEN)
+SELECT
+    CustomerID,
+    'IM703PQ1' AS EventID,
+    catID,
+    EST AS PEN
+FROM tempIMPQ
+WHERE CustomerID NOT IN (
+    SELECT CustomerID
+    FROM [Fact]
+    WHERE EventID = 'IM703PQ1'
+);
+
+SAVE TRANSACTION savepoint6;
+
+IF @@ERROR <> 0
+    ROLLBACK;
+ELSE
+    COMMIT;
